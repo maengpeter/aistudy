@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>수업용 학생 추첨 룰렛</title>
+  <title>수업용 학생 추첨 원판 룰렛</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Canvas Confetti (당첨 폭죽 효과) -->
@@ -12,8 +12,59 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <!-- 커스텀 스타일시트 연결 -->
-  <link rel="stylesheet" href="style.css">
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Outfit:wght@400;600;800&display=swap');
+
+    body {
+      font-family: 'Gowun Dodum', 'Outfit', sans-serif;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+
+    /* 룰렛 포인터 화살표 스타일 및 애니메이션 */
+    .roulette-pointer {
+      width: 0;
+      height: 0;
+      border-left: 18px solid transparent;
+      border-right: 18px solid transparent;
+      border-top: 32px solid #ef4444;
+      filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
+      z-index: 20;
+    }
+
+    /* 회전 버튼 3D 누름 효과 */
+    .btn-spin {
+      box-shadow: 0 8px 0 #1d4ed8, 0 15px 20px rgba(0,0,0,0.2);
+      transition: all 0.1s ease;
+    }
+    .btn-spin:active {
+      transform: translateY(4px);
+      box-shadow: 0 4px 0 #1d4ed8, 0 8px 10px rgba(0,0,0,0.2);
+    }
+    .btn-spin:disabled {
+      box-shadow: none;
+      transform: translateY(4px);
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    /* 스크롤바 커스텀 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
 </head>
 <body class="min-h-screen flex flex-col justify-between text-slate-800 p-3 sm:p-6">
 
@@ -202,7 +253,429 @@
     <p>수업을 위한 똑똑하고 예쁜 룰렛 웹앱 • 선생님의 편리한 학급 경영을 응원합니다!</p>
   </footer>
 
-  <!-- 스크립트 연결 -->
-  <script src="script.js"></script>
+  <!-- 자바스크립트 로직 -->
+  <script>
+    // --- 1. 상태 및 상수 데이터 ---
+    const PALETTE = [
+      '#4F46E5', '#7C3AED', '#EC4899', '#F43F5E', 
+      '#EF4444', '#F97316', '#F59E0B', '#10B981', 
+      '#06B6D4', '#0EA5E9', '#3B82F6', '#6366F1'
+    ];
+
+    let currentClassId = 'default_class';
+    let classData = {
+      'default_class': {
+        name: '1반 학생 명단',
+        students: ['김민준', '이서연', '박도윤', '최지우', '정예준', '강하은', '조시우', '윤서아', '장건우', '임지안', '한주원', '오하윤']
+      }
+    };
+
+    let currentStudents = []; // 현재 원판에 활성화된 학생들
+    let history = []; // 당첨 이력
+    let isSpinning = false;
+    let currentAngle = 0; // 원판 현재 회전 각도(라디안)
+    let isSoundOn = true;
+
+    // Canvas DOM 레퍼런스 및 2D Context
+    let canvas;
+    let ctx;
+
+    // --- 2. 초기화 및 웹 오디오(Tone.js) 설정 ---
+    window.onload = function() {
+      canvas = document.getElementById('rouletteCanvas');
+      ctx = canvas.getContext('2d');
+
+      loadLocalStorage();
+      updateClassSelectOptions();
+      loadCurrentClassStudents();
+      drawRoulette();
+      updateHistoryUI();
+    };
+
+    // 로컬 스토리지 불러오기
+    function loadLocalStorage() {
+      const savedData = localStorage.getItem('teacher_roulette_classes');
+      if (savedData) {
+        try {
+          classData = JSON.parse(savedData);
+        } catch(e) {
+          console.error("저장 데이터 로드 실패", e);
+        }
+      }
+    }
+
+    // 로컬 스토리지 저장하기
+    function saveToLocalStorage() {
+      localStorage.setItem('teacher_roulette_classes', JSON.stringify(classData));
+    }
+
+    // 현재 선택된 학급 학생들 로드
+    function loadCurrentClassStudents() {
+      if (classData[currentClassId]) {
+        currentStudents = [...classData[currentClassId].students];
+        document.getElementById('currentClassBadge').innerText = classData[currentClassId].name;
+        document.getElementById('studentTextarea').value = classData[currentClassId].students.join('\n');
+      }
+    }
+
+    // --- 3. Sound Effects (Tone.js 기반) ---
+    function playClickSound() {
+      if (!isSoundOn) return;
+      try {
+        const synth = new Tone.MembraneSynth().toDestination();
+        synth.volume.value = -12;
+        synth.triggerAttackRelease("C3", "32n");
+      } catch(e){}
+    }
+
+    function playWinFanfare() {
+      if (!isSoundOn) return;
+      try {
+        const synth = new Tone.PolySynth(Tone.Synth).toDestination();
+        synth.volume.value = -6;
+        const now = Tone.now();
+        synth.triggerAttackRelease(["C4", "E4", "G4", "C5"], "8n", now);
+        synth.triggerAttackRelease(["G4", "B4", "D5", "G5"], "4n", now + 0.25);
+      } catch(e){}
+    }
+
+    function toggleSound() {
+      isSoundOn = !isSoundOn;
+      const soundIcon = document.getElementById('soundIcon');
+      const soundText = document.getElementById('soundText');
+      
+      if (isSoundOn) {
+        soundIcon.className = "fa-solid fa-volume-high text-indigo-600";
+        soundText.innerText = "소리 켜짐";
+      } else {
+        soundIcon.className = "fa-solid fa-volume-xmark text-slate-400";
+        soundText.innerText = "음소거";
+      }
+    }
+
+    // --- 4. 룰렛 그래픽 렌더링 (Canvas) ---
+    function drawRoulette() {
+      if (!canvas || !ctx) return;
+
+      const numSegments = currentStudents.length;
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      const radius = centerX - 10;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (numSegments === 0) {
+        // 학생이 없을 때 안내 렌더링
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = '#f1f5f9';
+        ctx.fill();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.stroke();
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 18px "Gowun Dodum", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('명단 설정에서 학생을 추가해주세요', centerX, centerY);
+        return;
+      }
+
+      const arcSize = (2 * Math.PI) / numSegments;
+
+      // 룰렛 조각 그리기
+      for (let i = 0; i < numSegments; i++) {
+        const angle = currentAngle + i * arcSize;
+
+        // 조각 배경
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, angle, angle + arcSize);
+        ctx.fillStyle = PALETTE[i % PALETTE.length];
+        ctx.fill();
+
+        // 조각 경계선
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        // 텍스트 출력
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(angle + arcSize / 2);
+
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#ffffff';
+
+        // 인원수에 따른 폰트 크기 자동 조절
+        let fontSize = 18;
+        if (numSegments > 20) fontSize = 12;
+        else if (numSegments > 12) fontSize = 14;
+
+        ctx.font = `bold ${fontSize}px "Gowun Dodum", sans-serif`;
+        
+        // 이름 텍스트 그림자 효과
+        ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+        ctx.shadowBlur = 4;
+
+        // 원판 가장자리 안쪽에 이름 배치
+        ctx.fillText(currentStudents[i], radius - 24, 6);
+        ctx.restore();
+      }
+
+      // 외곽 테두리 링
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    }
+
+    // --- 5. 룰렛 회전 애니메이션 로직 ---
+    function spinRoulette() {
+      if (isSpinning) return;
+      if (currentStudents.length === 0) {
+        alert('추첨할 학생이 없습니다. 우측 상단 "명단 설정"에서 학생을 추가해주세요!');
+        return;
+      }
+
+      // Tone.js Audio Context 활성화
+      if (typeof Tone !== 'undefined' && Tone.start) {
+        Tone.start();
+      }
+
+      isSpinning = true;
+      document.getElementById('spinBtn').disabled = true;
+
+      const winnerDisplay = document.getElementById('winnerDisplay');
+      const winnerSubText = document.getElementById('winnerSubText');
+      winnerDisplay.innerText = "두구두구...";
+      winnerSubText.innerText = "과연 누구일까요?";
+
+      // 기본 회전수(8~12바퀴) + 랜덤 각도
+      const extraRounds = 8 + Math.floor(Math.random() * 5);
+      const randomTargetAngle = Math.random() * Math.PI * 2;
+      const totalRotation = extraRounds * Math.PI * 2 + randomTargetAngle;
+
+      const duration = 4500; // 회전 시간 (4.5초)
+      const startTimestamp = performance.now();
+      const initialAngle = currentAngle;
+
+      let lastTickSegment = -1;
+      const numSegments = currentStudents.length;
+      const arcSize = (2 * Math.PI) / numSegments;
+
+      function animate(now) {
+        const elapsed = now - startTimestamp;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // Ease-out (Cubic) 감속 공식 적용
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+        currentAngle = initialAngle + totalRotation * easeOut;
+
+        // 원판 화살표 틱(Tick) 효과음 처리
+        const normalizedAngle = (3 * Math.PI / 2 - (currentAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        const currentSegment = Math.floor(normalizedAngle / arcSize);
+        if (currentSegment !== lastTickSegment) {
+          playClickSound();
+          lastTickSegment = currentSegment;
+        }
+
+        drawRoulette();
+
+        if (progress < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          finishSpin(normalizedAngle);
+        }
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // 회전 완료 후 처리
+    function finishSpin(normalizedAngle) {
+      isSpinning = false;
+      document.getElementById('spinBtn').disabled = false;
+
+      const numSegments = currentStudents.length;
+      const arcSize = (2 * Math.PI) / numSegments;
+      const winnerIndex = Math.floor(normalizedAngle / arcSize);
+      const winnerName = currentStudents[winnerIndex];
+
+      // 당첨자 텍스트 및 효과음/폭죽
+      document.getElementById('winnerDisplay').innerText = winnerName;
+      document.getElementById('winnerSubText').innerText = "축하합니다! 발표를 시작해주세요.";
+
+      playWinFanfare();
+      triggerConfetti();
+
+      // 당첨 팝업 모달 띄우기
+      showWinnerModal(winnerName);
+
+      // 히스토리에 추가
+      addToHistory(winnerName);
+
+      // 옵션: 자동 제외 체크 시 원판에서 제거
+      const shouldRemove = document.getElementById('removeWinnerCheck').checked;
+      if (shouldRemove) {
+        setTimeout(() => {
+          currentStudents.splice(winnerIndex, 1);
+          drawRoulette();
+        }, 1200);
+      }
+    }
+
+    // 당첨 모달 제어 함수
+    function showWinnerModal(name) {
+      const modal = document.getElementById('winnerModalOverlay');
+      const nameEl = document.getElementById('modalWinnerName');
+      nameEl.innerText = name;
+      modal.classList.remove('hidden');
+    }
+
+    function closeWinnerModal() {
+      const modal = document.getElementById('winnerModalOverlay');
+      modal.classList.add('hidden');
+    }
+
+    // 당첨 폭죽 효과 (Canvas Confetti)
+    function triggerConfetti() {
+      if (typeof confetti === 'function') {
+        confetti({
+          particleCount: 100,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+      }
+    }
+
+    // --- 6. 당첨 이력(History) 관리 ---
+    function addToHistory(name) {
+      const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      history.unshift({ name, time: timeStr });
+      updateHistoryUI();
+    }
+
+    function updateHistoryUI() {
+      const historyListEl = document.getElementById('historyList');
+      const countBadge = document.getElementById('historyCountBadge');
+
+      countBadge.innerText = `${history.length}명`;
+
+      if (history.length === 0) {
+        historyListEl.innerHTML = `<div class="text-center text-slate-400 py-8 text-xs">아직 당첨된 학생이 없습니다.</div>`;
+        return;
+      }
+
+      historyListEl.innerHTML = history.map((item, index) => `
+        <div class="flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100/80 rounded-xl transition border border-slate-100">
+          <div class="flex items-center gap-3">
+            <span class="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center justify-center">
+              ${history.length - index}
+            </span>
+            <span class="font-bold text-slate-800 text-base">${item.name}</span>
+          </div>
+          <span class="text-[11px] text-slate-400 font-mono">${item.time}</span>
+        </div>
+      `).join('');
+    }
+
+    function clearHistory() {
+      if (history.length === 0) return;
+      if (confirm('당첨 기록을 모두 삭제하시겠습니까?')) {
+        history = [];
+        updateHistoryUI();
+      }
+    }
+
+    // --- 7. 명단 설정 사이드바 및 데이터 관리 ---
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebarOverlay');
+      
+      const isOpen = !sidebar.classList.contains('translate-x-full');
+      
+      if (isOpen) {
+        sidebar.classList.add('translate-x-full');
+        overlay.classList.add('hidden');
+      } else {
+        sidebar.classList.remove('translate-x-full');
+        overlay.classList.remove('hidden');
+      }
+    }
+
+    function updateClassSelectOptions() {
+      const select = document.getElementById('classSelect');
+      select.innerHTML = Object.keys(classData).map(id => `
+        <option value="${id}" ${id === currentClassId ? 'selected' : ''}>
+          ${classData[id].name} (${classData[id].students.length}명)
+        </option>
+      `).join('');
+    }
+
+    function switchClass(classId) {
+      currentClassId = classId;
+      loadCurrentClassStudents();
+      drawRoulette();
+    }
+
+    function addNewClass() {
+      const name = prompt('새 학급 이름을 입력하세요 (예: 2반, 동아리):');
+      if (!name) return;
+      
+      const newId = 'class_' + Date.now();
+      classData[newId] = {
+        name: name,
+        students: ['학생1', '학생2', '학생3', '학생4', '학생5']
+      };
+      
+      saveToLocalStorage();
+      updateClassSelectOptions();
+      switchClass(newId);
+    }
+
+    function saveStudentList() {
+      const text = document.getElementById('studentTextarea').value;
+      const lines = text.split('\n')
+                        .map(s => s.trim())
+                        .filter(s => s.length > 0);
+
+      if (lines.length === 0) {
+        alert('최소 1명 이상의 학생 이름을 입력해야 합니다.');
+        return;
+      }
+
+      classData[currentClassId].students = lines;
+      currentStudents = [...lines];
+      
+      saveToLocalStorage();
+      updateClassSelectOptions();
+      drawRoulette();
+      toggleSidebar();
+
+      document.getElementById('winnerDisplay').innerText = "준비 완료!";
+      document.getElementById('winnerSubText').innerText = "명단이 업데이트되었습니다.";
+    }
+
+    // 명단 샘플 템플릿 로더
+    function loadPreset(count) {
+      const names = [
+        "김민준", "이서연", "박도윤", "최지우", "정예준", "강하은", "조시우", "윤서아", 
+        "장건우", "임지안", "한주원", "오하윤", "서진우", "신수아", "권민재", "황유나",
+        "송현우", "류채원", "전준영", "고다은", "문성민", "양지원", "손승현", "배소율", "백지후"
+      ];
+      document.getElementById('studentTextarea').value = names.slice(0, count).join('\n');
+    }
+
+    function loadNumberedPreset(count) {
+      const list = [];
+      for (let i = 1; i <= count; i++) {
+        list.push(`${i}번 학생`);
+      }
+      document.getElementById('studentTextarea').value = list.join('\n');
+    }
+  </script>
 </body>
 </html>
